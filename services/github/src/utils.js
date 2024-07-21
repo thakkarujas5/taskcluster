@@ -174,6 +174,13 @@ export const tailLog = (log, maxLines = 250, maxPayloadLength = 30000) => {
     .join('\n');
 };
 
+export const headLog = (log, maxLines = 250, maxPayloadLength = 30000) => {
+  return ansi2txt(log).substring(0, maxPayloadLength)
+    .split('\n')
+    .slice(0, maxLines)
+    .join('\n');
+};
+
 export const markdownLog = (log) => ['\n---\n\n```bash\n', log, '\n```'].join('');
 export const markdownAnchor = (name, url) => `[${name}](${url})`;
 
@@ -219,6 +226,7 @@ export default {
   shouldSkipPullRequest,
   ansi2txt,
   tailLog,
+  headLog,
   markdownLog,
   markdownAnchor,
   checkGithubSignature,

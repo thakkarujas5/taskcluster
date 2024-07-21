@@ -7,12 +7,13 @@ import {
   CUSTOM_CHECKRUN_ANNOTATIONS_ARTIFACT_NAME,
   CHECK_RUN_STATES,
   TASK_STATE_TO_CHECK_RUN_STATE,
+  CHECKTASK_TEXT
 } from '../constants.js';
 
 import QueueLock from '../queue-lock.js';
-import { tailLog, markdownLog, markdownAnchor } from '../utils.js';
+import { tailLog, markdownLog, markdownAnchor, headLog } from '../utils.js';
 import { requestArtifact } from './requestArtifact.js';
-import { taskUI, makeDebug, taskLogUI, GithubCheck } from './utils.js';
+import { taskUI, makeDebug, taskLogUI, GithubCheck, getTimeDifference, taskGroupUI } from './utils.js';
 
 /**
  * Tracking events order to prevent older events from overwriting newer updates
@@ -164,6 +165,9 @@ export async function statusHandler(message) {
       output_summary: outputSummary || taskDefinition.metadata.description,
       output_annotations: customCheckRunAnnotations,
     });
+
+    const artifactList = await this.queueClient.listTaskGroup(taskGroupId, { limit: 50 });
+
     const output = githubCheck.output;
     output.addText(markdownAnchor(CHECKRUN_TEXT, taskUI(this.context.cfg.taskcluster.rootUrl, taskGroupId, taskId)));
     output.addText(markdownAnchor(
@@ -177,11 +181,26 @@ export async function statusHandler(message) {
         taskDefinition.payload?.logs?.live || taskDefinition.payload?.log,
       ),
     ));
+    output.addText(markdownAnchor(CHECKTASK_TEXT, taskGroupUI(this.context.cfg.taskcluster.rootUrl, taskGroupId)));
+
+    const taskExecutionTime = getTimeDifference(runs[runId]?.started, runs[runId]?.resolved);
+
+    output.addText(`Started: ${runs[runId]?.started}`);
+    output.addText(`Resolved: ${runs[runId]?.resolved}`);
+    output.addText(`Task Execution Time: ${taskExecutionTime}`);
+    output.addText(`Task Status: ${runs[runId]?.state}`);
+    output.addText(`Reason Resolved: ${runs[runId]?.reasonResolved}`);
+    console.log("ArtifactL: ", artifactList?.tasks)
+
     if (customCheckRunText) {
       output.addText(customCheckRunText);
     }
     if (liveLogText) {
-      output.addText(markdownLog(tailLog(liveLogText, 250, githubCheck.output.getRemainingMaxSize())));
+      output.addText(liveLogText.length);
+      output.addText(githubCheck.output.getRemainingMaxSize())
+     // output.addText(markdownLog(tailLog(liveLogText, 250, githubCheck.output.getRemainingMaxSize())));
+     output.addText(markdownLog(headLog(liveLogText, 20, githubCheck.output.getRemainingMaxSize())));
+     output.addText(githubCheck.output.getRemainingMaxSize())
     }
 
     let [checkRun] = await this.context.db.fns.get_github_check_by_task_group_and_task_id(taskGroupId, taskId);
