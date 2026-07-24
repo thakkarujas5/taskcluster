@@ -13,6 +13,7 @@ import oauth2AccessToken from './oauth2AccessToken.js';
 import oauth2 from './oauth2.js';
 import PostgresSessionStore from '../login/PostgresSessionStore.js';
 import { traceMiddleware } from '@taskcluster/lib-app';
+import { normalizeAllowedOrigins } from './origins.js';
 
 const __dirname = new URL('.', import.meta.url).pathname;
 
@@ -23,15 +24,7 @@ export default async ({ cfg, strategies, auth, monitor, db, api }) => {
   app.set('view engine', 'ejs');
   app.set('views', path.resolve(path.join(__dirname, '../views')));
 
-  const allowedCORSOrigins = cfg.server.allowedCORSOrigins
-    .map(o => {
-      if (typeof o === 'string' && o.startsWith('/')) {
-        return new RegExp(o.slice(1, o.length - 1));
-      }
-
-      return o;
-    })
-    .filter(o => o && o !== '');
+  const allowedCORSOrigins = normalizeAllowedOrigins(cfg.server.allowedCORSOrigins);
   const corsOptions = {
     origin: allowedCORSOrigins,
     credentials: true,

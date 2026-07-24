@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://taskcluster.net/schemas/web-server/v1/events/subscribe-message.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "requestId", "payload"],
+  "properties": {
+    "type": { "const": "Subscribe" },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exchange", "filters"],
+      "properties": {
+        "exchange": {
+          "enum": [
+            "task-defined",
+            "task-pending",
+            "task-running",
+            "task-completed",
+            "task-failed",
+            "task-exception",
+            "artifact-created"
+          ]
+        },
+        "filters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "taskId": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "taskGroupId": { "type": "string", "minLength": 1, "maxLength": 255 }
+          },
+          "anyOf": [{ "required": ["taskId"] }, { "required": ["taskGroupId"] }]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "exchange": { "const": "artifact-created" }
+            }
+          },
+          "then": {
+            "properties": {
+              "filters": {
+                "type": "object",
+                "required": ["taskGroupId"],
+                "properties": {
+                  "taskGroupId": { "type": "string", "minLength": 1, "maxLength": 255 }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

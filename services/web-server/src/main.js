@@ -26,6 +26,7 @@ import clients from './clients.js';
 import createContext from './createContext.js';
 import createSchema from './createSchema.js';
 import createSubscriptionServer from './servers/createSubscriptionServer.js';
+import createEventWebSocketServer from './servers/createEventWebSocketServer.js';
 import resolvers from './resolvers/index.js';
 import typeDefs from './graphql/index.js';
 import PulseEngine from './PulseEngine/index.js';
@@ -173,13 +174,35 @@ const load = loader(
     },
 
     httpServer: {
-      requires: ['cfg', 'app', 'schema', 'context', 'monitor', 'authFactory'],
-      setup: async ({ cfg, app, schema, context, monitor, authFactory }) => {
+      requires: ['cfg', 'app', 'schema', 'context', 'monitor', 'authFactory', 'pulseEngine', 'clients'],
+      setup: async ({ cfg, app, schema, context, monitor, authFactory, pulseEngine, clients }) => {
         const httpServer = createServer(app);
+        const eventWebSocketServer = createEventWebSocketServer({
+          cfg,
+          server: httpServer,
+          authFactory,
+          pulseEngine,
+          queueEvents: clients({ rootUrl: cfg.taskcluster.rootUrl }).queueEvents,
+          monitor: monitor.childMonitor('event-websocket'),
+        });
+        httpServer.once('close', () => {
+          eventWebSocketServer.close().catch(err => monitor.reportError(err));
+        });
         const server = new ApolloServer({
           schema,
           formatError,
-          plugins: [ApolloServerPluginDrainHttpServer({ httpServer })],
+          plugins: [
+            ApolloServerPluginDrainHttpServer({ httpServer }),
+            {
+              async serverWillStart() {
+                return {
+                  async drainServer() {
+                    await eventWebSocketServer.close();
+                  },
+                };
+              },
+            },
+          ],
           csrfPrevention: true,
           introspection: true,
           parseOptions: {

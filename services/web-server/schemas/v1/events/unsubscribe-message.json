@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://taskcluster.net/schemas/web-server/v1/events/unsubscribe-message.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "requestId", "subscriptionId"],
+  "properties": {
+    "type": { "const": "Unsubscribe" },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "subscriptionId": { "type": "string", "minLength": 1, "maxLength": 128 }
+  }
+}

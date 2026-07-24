@@ -23,6 +23,18 @@ defaults:
     # Socket disconnects after 6 hours
     socketAliveTimeoutMilliSeconds: 21600000
 
+    eventWebSocket:
+      enabled: true
+      authenticationTimeoutMilliseconds: 10000
+      heartbeatIntervalMilliseconds: 30000
+      maximumLifetimeMilliseconds: 21600000
+      maxMessageBytes: 65536
+      maxSubscriptionsPerConnection: 20
+      maxConnections: 10000
+      maxSubscriptions: 20000
+      maxBufferedBytes: 1048576
+      shutdownGracePeriodMilliseconds: 5000
+
     # The CORS allowed origins (passed to https://yarnpkg.com/en/package/cors);
     # typically this is the root URL, but in testing it may have other values.
     # The legacy root URL is special-cased.  Values beginning with `/` are

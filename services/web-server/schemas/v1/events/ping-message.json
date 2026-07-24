@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://taskcluster.net/schemas/web-server/v1/events/ping-message.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "requestId"],
+  "properties": {
+    "type": { "const": "Ping" },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 128 }
+  }
+}

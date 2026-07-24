@@ -125,6 +125,11 @@ export default defineConfig(({ mode }) => ({
       '/graphql': proxy(proxyTarget),
       '/schemas': proxy(proxyTarget),
       '/references': proxy(proxyTarget),
+      '/api/web-server/v1/events': {
+        target: proxyTarget.replace(/^http(s)?:/, 'ws$1:'),
+        ws: true,
+        changeOrigin: true,
+      },
       '/api/web-server': proxy(proxyTarget),
       '/subscription': {
         target: proxyTarget.replace(/^http(s)?:/, 'ws$1:'),

@@ -22,7 +22,7 @@ MonitorManager.register({
   level: 'debug',
   description: `
     The PulseEngine has created a queue and bound it to one or more exchanges in
-    response to a GraphQL subsscription request.`,
+    response to a live-event subscription request.`,
   fields: {
     subscriptionId: 'The subscriptionId, which will also appear in the AMQP queue name',
   },
@@ -36,9 +36,34 @@ MonitorManager.register({
   level: 'debug',
   description: `
     The PulseEngine has deleted a queue bound to one or more exchanges in
-    response to termination of a GraphQL subsscription request.`,
+    response to termination of a live-event subscription request.`,
   fields: {
     subscriptionId: 'The subscriptionId, which will also appear in the AMQP queue name',
+  },
+});
+
+MonitorManager.register({
+  name: 'eventWebSocketConnection',
+  title: 'Event WebSocket Connection Changed',
+  type: 'event-websocket-connection',
+  version: 1,
+  level: 'info',
+  description: 'A connection to the versioned event WebSocket endpoint was opened or closed.',
+  fields: {
+    connected: 'True when the connection opened and false when it closed.',
+  },
+});
+
+MonitorManager.register({
+  name: 'eventWebSocketSubscription',
+  title: 'Event WebSocket Subscription Changed',
+  type: 'event-websocket-subscription',
+  version: 1,
+  level: 'debug',
+  description: 'An exchange subscription was created or removed from an event WebSocket connection.',
+  fields: {
+    action: 'Either created or removed.',
+    exchange: 'The public allow-listed exchange name.',
   },
 });
 
