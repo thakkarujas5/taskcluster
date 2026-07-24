@@ -34,6 +34,15 @@ export const AUDIT_ENTRY_TYPE = Object.freeze({
     DELETED: 'deleted',
   },
 });
+
+const AUDIT_HISTORY_SORT_FIELDS = Object.freeze({
+  entityId: 'entity_id',
+  entityType: 'entity_type',
+  clientId: 'client_id',
+  actionType: 'action_type',
+  created: 'created',
+});
+
 /**
  * Helper to return a role as defined in the blob to one suitable for return.
  * This involves adding expandedRoles using the resolver.
@@ -356,6 +365,8 @@ builder.declare(
     route: '/audit/:entityType/:entityId',
     query: {
       ...paginateResults.query,
+      sortBy: /^(entityId|entityType|clientId|actionType|created)$/,
+      sortDirection: /^(asc|desc)$/,
     },
     params: {
       entityType: /^(client|role|secret|hook|worker-pool)$/,
@@ -366,15 +377,30 @@ builder.declare(
     scopes: 'auth:audit-history:<entityType>',
     stability: 'stable',
     title: 'Get Entity History',
-    description: ['Get entity history based on entity type and entity name'].join('\n'),
+    description: [
+      'Get entity history based on entity type and entity name.',
+      'Results are ordered by `sortBy` in the requested `sortDirection`.',
+      '`sortBy` defaults to `created`; `sortDirection` defaults to `desc`.',
+    ].join('\n'),
   },
   async function (req, res) {
     const entityType = req.params.entityType;
     const entityId = req.params.entityId;
+    const sortBy = AUDIT_HISTORY_SORT_FIELDS[req.query.sortBy || 'created'];
+    const sortDirection = req.query.sortDirection || 'desc';
 
     const { continuationToken, rows } = await paginateResults({
       query: req.query,
-      fetch: (size, offset) => this.db.fns.get_combined_audit_history(null, entityId, entityType, size, offset),
+      fetch: (size, offset) =>
+        this.db.fns.get_combined_audit_history_2(
+          null,
+          entityId,
+          entityType,
+          sortBy,
+          sortDirection,
+          size,
+          offset
+        ),
       maxLimit: 1000,
     });
 
@@ -388,6 +414,8 @@ builder.declare(
     route: '/clients/:clientId/audit',
     query: {
       ...paginateResults.query,
+      sortBy: /^(entityId|entityType|clientId|actionType|created)$/,
+      sortDirection: /^(asc|desc)$/,
     },
     name: 'listAuditHistory',
     category: 'Audit',
@@ -395,14 +423,29 @@ builder.declare(
     scopes: 'auth:client-audit-history:<clientId>',
     stability: 'stable',
     title: 'List Audit History',
-    description: ['Get audit history of a client based on clientId.'].join('\n'),
+    description: [
+      'Get audit history of a client based on clientId.',
+      'Results are ordered by `sortBy` in the requested `sortDirection`.',
+      '`sortBy` defaults to `created`; `sortDirection` defaults to `desc`.',
+    ].join('\n'),
   },
   async function (req, res) {
     const client_id = req.params.clientId;
+    const sortBy = AUDIT_HISTORY_SORT_FIELDS[req.query.sortBy || 'created'];
+    const sortDirection = req.query.sortDirection || 'desc';
 
     const { continuationToken, rows } = await paginateResults({
       query: req.query,
-      fetch: (size, offset) => this.db.fns.get_combined_audit_history(client_id, null, null, size, offset),
+      fetch: (size, offset) =>
+        this.db.fns.get_combined_audit_history_2(
+          client_id,
+          null,
+          null,
+          sortBy,
+          sortDirection,
+          size,
+          offset
+        ),
       maxLimit: 1000,
     });
 

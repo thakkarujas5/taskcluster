@@ -11,6 +11,7 @@ import ErrorPanel from '../../../components/ErrorPanel';
 import DataTable from '../../../components/DataTable';
 import { getAuditHistory } from '../../../utils/client';
 import { withAuth } from '../../../utils/Auth';
+import { sortAuditHistory } from '../utils';
 
 const useStyles = theme => ({
   cardContent: {
@@ -38,7 +39,7 @@ export default class ViewAuditHistory extends Component {
     auditHistory: null,
     loading: true,
     error: null,
-    sortBy: null,
+    sortBy: 'created',
     sortDirection: 'desc',
   };
 
@@ -73,12 +74,17 @@ export default class ViewAuditHistory extends Component {
   };
 
   handleHeaderClick = header => {
-    const sortBy = header.id;
-    const { sortDirection } = this.state;
+    if (header.id === 'serial_no') {
+      return;
+    }
+
+    const { sortBy, sortDirection } = this.state;
+    const nextSortDirection =
+      sortBy === header.id && sortDirection === 'desc' ? 'asc' : 'desc';
 
     this.setState({
-      sortBy,
-      sortDirection: sortDirection === 'desc' ? 'asc' : 'desc',
+      sortBy: header.id,
+      sortDirection: nextSortDirection,
     });
   };
 
@@ -86,10 +92,15 @@ export default class ViewAuditHistory extends Component {
     const { auditHistory, loading, error, sortBy, sortDirection } = this.state;
     const { classes, match } = this.props;
     const { entityId } = match.params;
+    const sortedAuditHistory = sortAuditHistory(
+      auditHistory,
+      sortBy,
+      sortDirection
+    );
     const headers = [
       { id: 'serial_no', label: 'S.No.' },
-      { id: 'action_type', label: 'Action Type' },
-      { id: 'client_id', label: 'Client ID' },
+      { id: 'actionType', label: 'Action Type' },
+      { id: 'clientId', label: 'Client ID' },
       { id: 'created', label: 'Created' },
     ];
 
@@ -101,7 +112,7 @@ export default class ViewAuditHistory extends Component {
           <Card className={classes.card}>
             <CardContent className={classes.cardContent}>
               <DataTable
-                items={auditHistory}
+                items={sortedAuditHistory}
                 headers={headers}
                 sortByLabel={sortBy}
                 sortDirection={sortDirection}

@@ -49,9 +49,9 @@ helper.secrets.mockSuite('audit', ['gcp'], (mock, skipping) => {
 
     assert.equal(audit_history.auditHistory.length, 2);
     assert.equal(audit_history.auditHistory[0].clientId, 'static/taskcluster/root');
-    assert.equal(audit_history.auditHistory[0].actionType, 'created');
+    assert.equal(audit_history.auditHistory[0].actionType, 'updated');
     assert.equal(audit_history.auditHistory[1].clientId, 'static/taskcluster/root');
-    assert.equal(audit_history.auditHistory[1].actionType, 'updated');
+    assert.equal(audit_history.auditHistory[1].actionType, 'created');
 
     const audit_history_long = await helper.apiClient.getEntityHistory(entityType, longClientId);
 
@@ -77,8 +77,97 @@ helper.secrets.mockSuite('audit', ['gcp'], (mock, skipping) => {
 
     assert.equal(audit_history.auditHistory.length, 2);
     assert.equal(audit_history.auditHistory[0].clientId, 'static/taskcluster/root');
-    assert.equal(audit_history.auditHistory[0].actionType, 'created');
+    assert.equal(audit_history.auditHistory[0].actionType, 'updated');
     assert.equal(audit_history.auditHistory[1].clientId, 'static/taskcluster/root');
-    assert.equal(audit_history.auditHistory[1].actionType, 'updated');
+    assert.equal(audit_history.auditHistory[1].actionType, 'created');
+  });
+
+  test('audit history ordering and pagination', async () => {
+    const entityType = 'client';
+    const entityId = 'ordered-client';
+
+    await helper.withDbClient(client =>
+      client.query(
+        `
+          insert into audit_history (entity_id, entity_type, client_id, action_type, created)
+          values
+            ($1, $2, 'audit-actor', 'first',  '2026-01-01T00:00:00Z'),
+            ($1, $2, 'audit-actor', 'second', '2026-01-02T00:00:00Z'),
+            ($1, $2, 'audit-actor', 'third',  '2026-01-03T00:00:00Z'),
+            ($1, $2, 'audit-actor', 'fourth', '2026-01-04T00:00:00Z')
+        `,
+        [entityId, entityType]
+      )
+    );
+
+    const defaultPage1 = await helper.apiClient.getEntityHistory(entityType, entityId, { limit: 2 });
+    assert.deepEqual(
+      defaultPage1.auditHistory.map(entry => entry.actionType),
+      ['fourth', 'third']
+    );
+    assert(defaultPage1.continuationToken);
+
+    const defaultPage2 = await helper.apiClient.getEntityHistory(entityType, entityId, {
+      limit: 2,
+      continuationToken: defaultPage1.continuationToken,
+    });
+    assert.deepEqual(
+      defaultPage2.auditHistory.map(entry => entry.actionType),
+      ['second', 'first']
+    );
+    assert.equal(defaultPage2.continuationToken, undefined);
+
+    const ascendingPage1 = await helper.apiClient.getEntityHistory(entityType, entityId, {
+      limit: 2,
+      sortDirection: 'asc',
+    });
+    assert.deepEqual(
+      ascendingPage1.auditHistory.map(entry => entry.actionType),
+      ['first', 'second']
+    );
+    assert(ascendingPage1.continuationToken);
+
+    const ascendingPage2 = await helper.apiClient.getEntityHistory(entityType, entityId, {
+      limit: 2,
+      continuationToken: ascendingPage1.continuationToken,
+      sortDirection: 'asc',
+    });
+    assert.deepEqual(
+      ascendingPage2.auditHistory.map(entry => entry.actionType),
+      ['third', 'fourth']
+    );
+    assert.equal(ascendingPage2.continuationToken, undefined);
+
+    const actionTypeOrder = await helper.apiClient.getEntityHistory(entityType, entityId, {
+      limit: 4,
+      sortBy: 'actionType',
+      sortDirection: 'asc',
+    });
+    assert.deepEqual(
+      actionTypeOrder.auditHistory.map(entry => entry.actionType),
+      ['first', 'fourth', 'second', 'third']
+    );
+
+    const clientHistoryPage1 = await helper.apiClient.listAuditHistory('audit-actor', {
+      limit: 2,
+      sortBy: 'created',
+      sortDirection: 'asc',
+    });
+    assert.deepEqual(
+      clientHistoryPage1.auditHistory.map(entry => entry.actionType),
+      ['first', 'second']
+    );
+    assert(clientHistoryPage1.continuationToken);
+
+    const clientHistoryPage2 = await helper.apiClient.listAuditHistory('audit-actor', {
+      limit: 2,
+      continuationToken: clientHistoryPage1.continuationToken,
+      sortDirection: 'asc',
+    });
+    assert.deepEqual(
+      clientHistoryPage2.auditHistory.map(entry => entry.actionType),
+      ['third', 'fourth']
+    );
+    assert.equal(clientHistoryPage2.continuationToken, undefined);
   });
 });

@@ -1,0 +1,65 @@
+version: 129
+description: add configurable ordering to audit history queries
+methods:
+  get_combined_audit_history:
+    deprecated: true
+  get_combined_audit_history_2:
+    description: |
+      Get audit history by client ID OR by entity ID and entity type.
+      Results are ordered by the requested field and direction.
+      A null sort field defaults to created and a null sort direction defaults to descending.
+    mode: read
+    serviceName: auth
+    args: client_id_in text, entity_id_in text, entity_type_in text, sort_by_in text, sort_direction_in text, page_size_in integer, page_offset_in integer
+    returns:
+      table (
+        entity_id text,
+        entity_type text,
+        client_id text,
+        action_type text,
+        created timestamptz
+      )
+    body: |-
+      declare
+        sort_by text := coalesce(sort_by_in, 'created');
+        sort_direction text := coalesce(lower(sort_direction_in), 'desc');
+      begin
+        if sort_by not in ('entity_id', 'entity_type', 'client_id', 'action_type', 'created') then
+          raise exception 'sort_by_in must be entity_id, entity_type, client_id, action_type, or created';
+        end if;
+
+        if sort_direction not in ('asc', 'desc') then
+          raise exception 'sort_direction_in must be asc or desc';
+        end if;
+
+        return query
+        select
+          audit_history.entity_id,
+          audit_history.entity_type,
+          audit_history.client_id,
+          audit_history.action_type,
+          audit_history.created
+        from audit_history
+        where (audit_history.client_id = client_id_in OR client_id_in IS NULL)
+          AND (
+            (audit_history.entity_id = entity_id_in AND audit_history.entity_type = entity_type_in)
+            OR (entity_id_in IS NULL OR entity_type_in IS NULL)
+          )
+        order by
+          case when sort_by = 'entity_id' and sort_direction = 'asc' then audit_history.entity_id end asc nulls last,
+          case when sort_by = 'entity_id' and sort_direction = 'desc' then audit_history.entity_id end desc nulls last,
+          case when sort_by = 'entity_type' and sort_direction = 'asc' then audit_history.entity_type end asc nulls last,
+          case when sort_by = 'entity_type' and sort_direction = 'desc' then audit_history.entity_type end desc nulls last,
+          case when sort_by = 'client_id' and sort_direction = 'asc' then audit_history.client_id end asc nulls last,
+          case when sort_by = 'client_id' and sort_direction = 'desc' then audit_history.client_id end desc nulls last,
+          case when sort_by = 'action_type' and sort_direction = 'asc' then audit_history.action_type end asc nulls last,
+          case when sort_by = 'action_type' and sort_direction = 'desc' then audit_history.action_type end desc nulls last,
+          case when sort_by = 'created' and sort_direction = 'asc' then audit_history.created end asc nulls last,
+          case when sort_by = 'created' and sort_direction = 'desc' then audit_history.created end desc nulls last,
+          case when sort_direction = 'asc' then audit_history.created end asc,
+          case when sort_direction = 'desc' then audit_history.created end desc,
+          audit_history.entity_type asc,
+          audit_history.entity_id asc
+        limit get_page_limit(page_size_in)
+        offset get_page_offset(page_offset_in);
+      end

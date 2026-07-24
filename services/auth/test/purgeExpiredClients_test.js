@@ -56,7 +56,15 @@ helper.secrets.mockSuite(testing.suiteName(), ['azure', 'gcp'], (mock, skipping)
     await helper.load('purge-expired-clients');
     await assertClientAbsent();
 
-    const results = await helper.db.fns.get_combined_audit_history(null, CLIENT_ID, 'client', 10, 0);
+    const results = await helper.db.fns.get_combined_audit_history_2(
+      null,
+      CLIENT_ID,
+      'client',
+      null,
+      null,
+      10,
+      0
+    );
     assume(results.map(({ action_type }) => action_type).includes('expired'));
   });
 });

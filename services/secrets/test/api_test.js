@@ -212,7 +212,15 @@ helper.secrets.mockSuite(testing.suiteName(), [], (mock, skipping) => {
       });
 
       // check audit trail
-      const results = await helper.db.fns.get_combined_audit_history(null, expireKey, 'secret', 2, 0);
+      const results = await helper.db.fns.get_combined_audit_history_2(
+        null,
+        expireKey,
+        'secret',
+        null,
+        null,
+        2,
+        0
+      );
       assert.deepEqual(results.map(({ action_type }) => action_type).sort(), ['created', 'expired']);
 
       try {

@@ -50,9 +50,11 @@ await auth.getEntityHistory(entityType, entityId, [options]);
 Parameters:
 - `entityType`: The type of entity ("client", "role", "secret", or "hook")
 - `entityId`: The ID of the specific entity
-- `options`: Optional pagination parameters
+- `options`: Optional ordering and pagination parameters
   - `continuationToken`: Token for paginating through results
   - `limit`: Maximum number of entries to return
+  - `sortBy`: Field to order by: `"entityId"`, `"entityType"`, `"clientId"`, `"actionType"`, or `"created"` (defaults to `"created"`)
+  - `sortDirection`: Order direction, either `"asc"` or `"desc"` (defaults to `"desc"`)
 
 The response includes:
 - `auditHistory`: Array of audit entries, each containing:
@@ -89,6 +91,8 @@ const history = await auth.getEntityHistory(
   'my-role-id',
   {
     limit: 10,
+    sortBy: 'created',
+    sortDirection: 'asc',
     continuationToken: '...'
   }
 );
