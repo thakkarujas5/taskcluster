@@ -161,20 +161,9 @@ const load = loader(
         createApp({ cfg, strategies, auth, monitor, db, clients, rootUrl: cfg.taskcluster.rootUrl, api }),
     },
 
-    authFactory: {
-      requires: ['cfg'],
-      setup: ({ cfg }) => {
-        return ({ credentials }) =>
-          new taskcluster.Auth({
-            credentials,
-            rootUrl: cfg.taskcluster.rootUrl,
-          });
-      },
-    },
-
     httpServer: {
-      requires: ['cfg', 'app', 'schema', 'context', 'monitor', 'authFactory', 'pulseEngine', 'clients'],
-      setup: async ({ cfg, app, schema, context, monitor, authFactory, pulseEngine, clients }) => {
+      requires: ['cfg', 'app', 'schema', 'context', 'monitor', 'pulseEngine', 'clients'],
+      setup: async ({ cfg, app, schema, context, monitor, pulseEngine, clients }) => {
         const httpServer = createServer(app);
         const server = new ApolloServer({
           schema,
@@ -203,8 +192,9 @@ const load = loader(
           cfg,
           server: httpServer,
           pulseEngine,
-          clients,
-          authFactory,
+          // like GraphQL subscriptions, events connections carry no
+          // credentials (all public data), so instantiate the clients once
+          clients: clients({ rootUrl: cfg.taskcluster.rootUrl }),
           monitor: monitor.childMonitor('events'),
         });
 

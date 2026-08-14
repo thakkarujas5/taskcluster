@@ -18,6 +18,10 @@ const getEventsWsUrl = () => {
   return url.toString();
 };
 
+// Subscription ids are chosen by the client; the server only requires them to
+// be unique per connection. A counter keeps them readable in frame logs.
+let nextSubscriptionId = 1;
+
 /**
  * Open the events WebSocket, and once the connection is acknowledged send the
  * given subscribe frame. Handles the connection_init/ack handshake, delivery,
@@ -26,11 +30,10 @@ const getEventsWsUrl = () => {
  */
 const openEventsSubscription = (subscribeFrame, { onMessage, onError }) => {
   const ws = new WebSocket(getEventsWsUrl());
-  // The events server mints the subscriptionId and returns it in subscribe_ack;
-  // it stays null until then. This listener uses a single subscription per
-  // socket, so incoming data frames need no per-id routing.
-  let subscriptionId = null;
+  const id = `sub-${nextSubscriptionId}`;
   let torn = false;
+
+  nextSubscriptionId += 1;
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'connection_init' }));
@@ -47,13 +50,13 @@ const openEventsSubscription = (subscribeFrame, { onMessage, onError }) => {
 
     switch (frame.type) {
       case 'connection_ack':
-        ws.send(JSON.stringify(subscribeFrame));
-        break;
-      case 'subscribe_ack':
-        subscriptionId = frame.subscriptionId;
+        ws.send(JSON.stringify({ ...subscribeFrame, id }));
         break;
       case 'data':
-        onMessage(frame.message);
+        if (frame.id === id) {
+          onMessage(frame.message);
+        }
+
         break;
       case 'error':
         onError(new Error(frame.message ?? 'Pulse subscription error'));
@@ -77,12 +80,11 @@ const openEventsSubscription = (subscribeFrame, { onMessage, onError }) => {
 
   return () => {
     torn = true;
-    // Send an explicit unsubscribe only once the server has assigned an id.
-    // If teardown happens before subscribe_ack, closing the socket is enough:
-    // the server tears down the connection's subscriptions on close.
-    if (subscriptionId && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'unsubscribe', subscriptionId }));
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'unsubscribe', id }));
     }
+
     ws.close();
   };
 };
@@ -100,18 +102,35 @@ const subscribeToPulseMessages = (bindings, handlers) =>
   );
 
 /**
- * Subscribe to Pulse events by intent rather than by raw binding: the server
- * expands the named events into the matching exchanges, filtered by the routing
- * key. Pass a non-empty `subscriptions` array of event names (e.g.
- * `['taskDefined', 'taskCompleted']`) and a `routingKey` object of fields to
- * match (e.g. `{ taskGroupId }`); omitted routing-key fields are wildcarded.
- * Returns a teardown function that unsubscribes.
+ * Subscribe to task events within a task group, mirroring the
+ * tasksSubscriptions GraphQL subscription: pass a `taskGroupId` and a
+ * non-empty `subscriptions` array of event names (e.g. `['tasksDefined',
+ * 'tasksCompleted']`); the server resolves them to the matching exchanges and
+ * builds the routing key from the taskGroupId internally. Returns a teardown
+ * function that unsubscribes.
  */
-const subscribeToTaskEvents = ({ subscriptions, routingKey }, handlers) =>
+const subscribeToTaskGroupEvents = ({ taskGroupId, subscriptions }, handlers) =>
   openEventsSubscription(
-    { type: 'subscribe', kind: 'tasks', subscriptions, routingKey },
+    { type: 'subscribe', kind: 'tasks', taskGroupId, subscriptions },
+    handlers
+  );
+
+/**
+ * Subscribe to events for a single task, mirroring the taskSubscriptions
+ * GraphQL subscription: pass a `taskId` and a non-empty `subscriptions` array
+ * of event names (e.g. `['tasksDefined', 'tasksCompleted']`); the server
+ * resolves them to the matching exchanges and builds the routing key from the
+ * taskId internally. Returns a teardown function that unsubscribes.
+ */
+const subscribeToTaskEvents = ({ taskId, subscriptions }, handlers) =>
+  openEventsSubscription(
+    { type: 'subscribe', kind: 'task', taskId, subscriptions },
     handlers
   );
 
 export default subscribeToPulseMessages;
-export { subscribeToPulseMessages, subscribeToTaskEvents };
+export {
+  subscribeToPulseMessages,
+  subscribeToTaskGroupEvents,
+  subscribeToTaskEvents,
+};

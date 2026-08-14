@@ -6,7 +6,7 @@ const { Server: WebSocketServer } = WebSocket;
 const PING_INTERVAL_MS = 30000;
 const CONNECTION_INIT_TIMEOUT_MS = 10000;
 
-export default ({ cfg, server, pulseEngine, clients, authFactory, monitor }) => {
+export default ({ cfg, server, pulseEngine, clients, monitor }) => {
   const wss = new WebSocketServer({ server, path: '/events' });
 
   wss.on('connection', ws => {
@@ -19,7 +19,6 @@ export default ({ cfg, server, pulseEngine, clients, authFactory, monitor }) => 
       ws,
       pulseEngine,
       clients,
-      authFactory,
       monitor,
       socketAliveTimeoutMilliSeconds: cfg.server.socketAliveTimeoutMilliSeconds,
       connectionInitTimeoutMilliSeconds: CONNECTION_INIT_TIMEOUT_MS,

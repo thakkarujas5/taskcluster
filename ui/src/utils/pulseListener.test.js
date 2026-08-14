@@ -97,8 +97,8 @@ describe('subscribeToPulseMessages', () => {
     expect(subscribeFrame.bindings).toEqual([
       { exchange: 'exchange/foo/v1/thing', pattern: '#.bar.#' },
     ]);
-    // The server mints the subscriptionId; the client must not send one.
-    expect(subscribeFrame).not.toHaveProperty('subscriptionId');
+    // The client chooses the subscription id and sends it with the frame.
+    expect(typeof subscribeFrame.id).toBe('string');
   });
 
   it('accepts pattern-shaped bindings unchanged (PulseMessages view)', () => {
@@ -138,8 +138,10 @@ describe('subscribeToPulseMessages', () => {
 
     ws.simulateOpen();
     ws.simulateMessage({ type: 'connection_ack' });
-    ws.simulateMessage({ type: 'subscribe_ack', subscriptionId: 'srv-1' });
-    ws.simulateMessage({ type: 'data', subscriptionId: 'srv-1', message: msg });
+
+    const { id } = ws.sent.find(f => f.type === 'subscribe');
+
+    ws.simulateMessage({ type: 'data', id, message: msg });
 
     expect(onMessage).toHaveBeenCalledWith(msg);
   });
@@ -201,20 +203,17 @@ describe('subscribeToPulseMessages', () => {
 
     ws.simulateOpen();
     ws.simulateMessage({ type: 'connection_ack' });
-    ws.simulateMessage({ type: 'subscribe_ack', subscriptionId: 'srv-1' });
 
     teardown();
 
+    const { id } = ws.sent.find(f => f.type === 'subscribe');
     const unsubFrame = ws.sent.find(f => f.type === 'unsubscribe');
 
-    expect(unsubFrame).toEqual({
-      type: 'unsubscribe',
-      subscriptionId: 'srv-1',
-    });
+    expect(unsubFrame).toEqual({ type: 'unsubscribe', id });
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
 
-  it('tears down without sending unsubscribe when no id was assigned yet', () => {
+  it('tears down without sending frames when the socket never opened', () => {
     const teardown = subscribeToPulseMessages(
       [{ exchange: 'e', pattern: '#' }],
       { onMessage: vi.fn(), onError: vi.fn() }
@@ -222,13 +221,10 @@ describe('subscribeToPulseMessages', () => {
 
     const ws = FakeWebSocket._lastInstance;
 
-    ws.simulateOpen();
-    ws.simulateMessage({ type: 'connection_ack' });
-
-    // Teardown before subscribe_ack arrives: no id to unsubscribe, just close.
+    // Teardown while still connecting: nothing to send, just close.
     teardown();
 
-    expect(ws.sent.find(f => f.type === 'unsubscribe')).toBeUndefined();
+    expect(ws.sent).toEqual([]);
     expect(ws.readyState).toBe(FakeWebSocket.CLOSED);
   });
 
