@@ -504,7 +504,7 @@ exports[`should render TaskDetailsCard 1`] = `
               <p
                 class="MuiTypography-root MuiListItemText-secondary MuiTypography-body2 MuiTypography-colorTextSecondary MuiTypography-displayBlock"
               >
-                undefined of undefined
+                5 of undefined
               </p>
             </div>
           </li>
@@ -602,7 +602,9 @@ exports[`should render TaskDetailsCard 1`] = `
                 >
                   <span
                     class="MuiButton-label"
-                  />
+                  >
+                    high
+                  </span>
                 </button>
               </p>
             </div>

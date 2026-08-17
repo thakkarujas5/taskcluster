@@ -73,6 +73,20 @@ export const TASK_STATE = {
   EXCEPTION: 'EXCEPTION',
   UNSCHEDULED: 'UNSCHEDULED',
 };
+export const TASK_REQUIRES = {
+  ALL_COMPLETED: 'all-completed',
+  ALL_RESOLVED: 'all-resolved',
+};
+// Task states as spelled by the queue's REST API. TASK_STATE holds the GraphQL
+// spelling, still used by the views that read GraphQL.
+export const API_TASK_STATE = {
+  COMPLETED: 'completed',
+  RUNNING: 'running',
+  FAILED: 'failed',
+  PENDING: 'pending',
+  EXCEPTION: 'exception',
+  UNSCHEDULED: 'unscheduled',
+};
 export const INTERACTIVE_TASK_STATUS = {
   WAITING: 'WAITING',
   RESOLVED: 'RESOLVED',

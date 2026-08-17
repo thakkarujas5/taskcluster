@@ -11,15 +11,17 @@ it('should render TaskDetailsCard', () => {
           taskId: 'taskId',
           status: {
             taskId: 'taskId',
-            provisioinerId: 'p1',
-            workerType: 'workerType',
             taskGroupId: 'tg1',
-            state: 'RUNNING',
+            state: 'running',
+            retriesLeft: 5,
+            runs: [],
           },
           taskQueueId: 'task/queue/id',
           created: '2022-02-15T12:00:00.000Z',
           deadline: '2022-05-15T12:00:00.000Z',
           expires: '2023-02-15T12:00:00.000Z',
+          priority: 'high',
+          requires: 'all-completed',
           scopes: ['scopes'],
           routes: [],
           dependencies: [],
@@ -37,8 +39,9 @@ it('should render TaskDetailsCard', () => {
           },
           extra: {},
         }}
-        dependents={{}}
-        onDependentsPageChange={vi.fn()}
+        dependents={[]}
+        onDependentsNextPage={vi.fn()}
+        onDependentsPreviousPage={vi.fn()}
         objectContent={{}}
       />
     </MemoryRouter>

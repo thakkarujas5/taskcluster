@@ -1,5 +1,4 @@
 import React, { Component, Fragment } from 'react';
-import { withApollo, graphql } from '@apollo/client/react/hoc';
 import { omit, pathOr, mergeRight } from 'ramda';
 import cloneDeep from 'lodash.clonedeep';
 import { withStyles } from '@material-ui/core/styles';
@@ -9,10 +8,9 @@ import Typography from '@material-ui/core/Typography';
 import List from '@material-ui/core/List';
 import ListItem from '@material-ui/core/ListItem';
 import Checkbox from '@material-ui/core/Checkbox';
-import dotProp from 'dot-prop-immutable';
 import jsonSchemaDefaults from 'json-schema-defaults';
 import { dump } from 'js-yaml';
-import { Queue } from '@taskcluster/client-web';
+import { PurgeCache, Queue } from '@taskcluster/client-web';
 import HammerIcon from 'mdi-react/HammerIcon';
 import CreationIcon from 'mdi-react/CreationIcon';
 import PencilIcon from 'mdi-react/PencilIcon';
@@ -38,36 +36,39 @@ import DialogAction from '../../../components/DialogAction';
 import ChangeTaskPriorityDialog from '../../../components/ChangeTaskPriorityDialog';
 import TaskActionForm from '../../../components/TaskActionForm';
 import Breadcrumbs from '../../../components/Breadcrumbs';
-import splitTaskQueueId from '../../../utils/splitTaskQueueId';
-import { gqlTaskToApi } from '../../../utils/gqlToApi';
 import {
   ARTIFACTS_PAGE_SIZE,
   DEPENDENTS_PAGE_SIZE,
   VALID_TASK,
-  TASK_ADDED_FIELDS,
   TASK_POLL_INTERVAL,
   UI_SCHEDULER_ID,
-  TASK_STATE,
+  API_TASK_STATE,
 } from '../../../utils/constants';
 import db from '../../../utils/db';
 import ErrorPanel from '../../../components/ErrorPanel';
 import formatError from '../../../utils/formatError';
-import removeKeys from '../../../utils/removeKeys';
 import parameterizeTask from '../../../utils/parameterizeTask';
 import { nice } from '../../../utils/slugid';
 import Link from '../../../utils/Link';
-import { changeTaskPriority, getClient } from '../../../utils/client';
+import { changeTaskPriority } from '../../../utils/client';
+import { subscribeToTaskEvents } from '../../../utils/pulseListener';
+import getTaskActions from '../../../utils/taskActions';
+import { withTaskclusterClient } from '../../../utils/TaskclusterClient';
 import { AuthContext } from '../../../utils/Auth';
 import submitTaskAction from '../submitTaskAction';
-import taskQuery from './task.graphql';
-import taskSubscription from './taskSubscription.graphql';
-import scheduleTaskQuery from './scheduleTask.graphql';
-import rerunTaskQuery from './rerunTask.graphql';
-import cancelTaskQuery from './cancelTask.graphql';
-import purgeWorkerCacheQuery from './purgeWorkerCache.graphql';
-import pageArtifactsQuery from './pageArtifacts.graphql';
 
-const updateTaskIdHistory = (id, task) => {
+// Every event that changes a task's status; the events server expands these
+// into the matching queue exchanges, filtered on this task's taskId.
+const TASK_EVENTS = [
+  'taskDefined',
+  'taskPending',
+  'taskRunning',
+  'taskCompleted',
+  'taskFailed',
+  'taskException',
+];
+
+const updateTaskIdHistory = (id, task, status) => {
   if (!VALID_TASK.test(id)) {
     return;
   }
@@ -79,7 +80,7 @@ const updateTaskIdHistory = (id, task) => {
     taskQueueId: task?.taskQueueId,
     created: task?.created,
     deadline: task?.deadline,
-    state: task?.status?.state,
+    state: status?.state,
     viewedAt: Date.now(),
   });
 };
@@ -93,7 +94,6 @@ const taskInContext = (tagSetList, taskTags) =>
 const getCachesFromTask = task =>
   Object.keys(pathOr({}, ['payload', 'cache'], task));
 
-@withApollo
 @withStyles(theme => ({
   title: {
     marginBottom: theme.spacing(1),
@@ -112,57 +112,363 @@ const getCachesFromTask = task =>
     ...theme.mixins.link,
   },
 }))
-@graphql(taskQuery, {
-  options: props => ({
-    fetchPolicy: 'network-only',
-    pollInterval: TASK_POLL_INTERVAL,
-    errorPolicy: 'all',
-    variables: {
-      taskId: props.match.params.taskId,
-      artifactsConnection: {
-        limit: ARTIFACTS_PAGE_SIZE,
-      },
-      dependentsConnection: {
-        limit: DEPENDENTS_PAGE_SIZE,
-      },
-    },
-  }),
-})
+@withTaskclusterClient
 export default class ViewTask extends Component {
   static contextType = AuthContext;
 
-  static getDerivedStateFromProps(props, state) {
-    const taskId = props.match.params.taskId || '';
-    const {
-      data: { task },
-    } = props;
+  state = {
+    task: null,
+    status: null,
+    taskActions: null,
+    // the task group's decision task, whose scopes actions are run with
+    decisionTask: null,
+    loading: true,
+    error: null,
+    subscriptionError: null,
+    artifacts: [],
+    artifactsLoading: false,
+    artifactsPage: 0,
+    hasNextArtifactsPage: false,
+    dependents: [],
+    dependentsLoading: false,
+    dependentsPage: 0,
+    hasNextDependentsPage: false,
+    selectedAction: null,
+    dialogOpen: false,
+    actionLoading: false,
+    dialogActionProps: null,
+    dialogError: null,
+    changePriorityDialogOpen: false,
+    caches: null,
+    selectedCaches: null,
+    formInputs: null,
+  };
 
-    if (taskId !== state.previousTaskId && task) {
-      updateTaskIdHistory(taskId, task);
+  mounted = true;
+
+  listener = null;
+
+  pollInterval = null;
+
+  // Continuation tokens of the pages already visited; the token at index N
+  // opens page N. The queue's tokens only ever point forwards, so paging back
+  // means replaying a token we have already seen.
+  artifactTokens = [null];
+
+  dependentTokens = [null];
+
+  componentDidMount() {
+    this.loadTask();
+    this.pollInterval = setInterval(this.refreshStatus, TASK_POLL_INTERVAL);
+  }
+
+  componentDidUpdate(prevProps) {
+    const { taskId, runId } = this.props.match.params;
+
+    if (prevProps.match.params.taskId !== taskId) {
+      this.loadTask();
+    } else if (prevProps.match.params.runId !== runId) {
+      // artifact pages are per-run, so start the new run at its first page
+      this.artifactTokens = [null];
+      this.loadArtifacts();
+    }
+  }
+
+  componentWillUnmount() {
+    this.mounted = false;
+    this.unsubscribe();
+    clearInterval(this.pollInterval);
+  }
+
+  get queue() {
+    return this.props.createTaskclusterClient({ Class: Queue });
+  }
+
+  get taskId() {
+    return this.props.match.params.taskId;
+  }
+
+  /**
+   * The run being displayed: the one in the URL, or the latest one.
+   */
+  getSelectedRunId(status = this.state.status) {
+    const { runId } = this.props.match.params;
+
+    if (runId !== undefined) {
+      return parseInt(runId, 10);
+    }
+
+    return Math.max((status?.runs?.length ?? 0) - 1, 0);
+  }
+
+  /**
+   * Ignore a response that arrived after the user moved on to another task.
+   */
+  isCurrent(taskId) {
+    return this.mounted && this.taskId === taskId;
+  }
+
+  async loadTask() {
+    const { taskId } = this;
+
+    this.setState({
+      loading: true,
+      error: null,
+      task: null,
+      status: null,
+      taskActions: null,
+      decisionTask: null,
+      artifacts: [],
+      artifactsPage: 0,
+      hasNextArtifactsPage: false,
+      dependents: [],
+      dependentsPage: 0,
+      hasNextDependentsPage: false,
+      dialogOpen: false,
+    });
+    this.artifactTokens = [null];
+    this.dependentTokens = [null];
+
+    try {
+      const { queue } = this;
+      const [task, { status }] = await Promise.all([
+        queue.task(taskId),
+        queue.status(taskId),
+      ]);
+
+      if (!this.isCurrent(taskId)) {
+        return;
+      }
 
       const caches = getCachesFromTask(task);
 
-      return {
-        dialogOpen: false,
-        previousTaskId: taskId,
+      this.setState({
+        task,
+        status,
+        loading: false,
         caches,
         selectedCaches: new Set(caches),
-      };
+      });
+      updateTaskIdHistory(taskId, task, status);
+      this.subscribe(taskId);
+      this.loadArtifacts(status);
+      this.loadDependents();
+      this.loadTaskActions(task);
+    } catch (error) {
+      if (this.isCurrent(taskId)) {
+        this.setState({ error, loading: false });
+      }
+    }
+  }
+
+  /**
+   * Load the actions.json of the task group's decision task, along with the
+   * decision task itself: running an action needs its scopes.
+   */
+  async loadTaskActions(task) {
+    const { taskId } = this;
+    const { taskGroupId } = task;
+    const { user } = this.context;
+
+    const [taskActions, decisionTask] = await Promise.all([
+      getTaskActions({ taskGroupId, user, contextScope: 'task' }).catch(
+        () => null
+      ),
+      taskGroupId === taskId
+        ? Promise.resolve(null)
+        : // a task without a decision task is normal; fall back to null
+          this.queue.task(taskGroupId).catch(() => null),
+    ]);
+
+    if (this.isCurrent(taskId)) {
+      this.setState({ taskActions, decisionTask });
+    }
+  }
+
+  async loadArtifacts(status = this.state.status, page = 0) {
+    const { taskId } = this;
+    const runId = this.getSelectedRunId(status);
+
+    if (!status?.runs?.length || !status.runs[runId]) {
+      this.setState({ artifacts: [], hasNextArtifactsPage: false });
+
+      return;
     }
 
-    return null;
+    this.setState({ artifactsLoading: true });
+
+    try {
+      const { artifacts, continuationToken } = await this.queue.listArtifacts(
+        taskId,
+        runId,
+        {
+          limit: ARTIFACTS_PAGE_SIZE,
+          ...(this.artifactTokens[page]
+            ? { continuationToken: this.artifactTokens[page] }
+            : null),
+        }
+      );
+
+      if (!this.isCurrent(taskId)) {
+        return;
+      }
+
+      this.artifactTokens[page + 1] = continuationToken;
+      this.setState({
+        artifacts,
+        artifactsPage: page,
+        artifactsLoading: false,
+        hasNextArtifactsPage: Boolean(continuationToken),
+      });
+    } catch (error) {
+      if (this.isCurrent(taskId)) {
+        // artifacts are secondary to the task itself: surface the failure
+        // without tearing down the page
+        this.setState({
+          artifacts: [],
+          artifactsLoading: false,
+          hasNextArtifactsPage: false,
+          error,
+        });
+      }
+    }
   }
+
+  async loadDependents(page = 0) {
+    const { taskId } = this;
+
+    this.setState({ dependentsLoading: true });
+
+    try {
+      const { tasks, continuationToken } = await this.queue.listDependentTasks(
+        taskId,
+        {
+          limit: DEPENDENTS_PAGE_SIZE,
+          ...(this.dependentTokens[page]
+            ? { continuationToken: this.dependentTokens[page] }
+            : null),
+        }
+      );
+
+      if (!this.isCurrent(taskId)) {
+        return;
+      }
+
+      this.dependentTokens[page + 1] = continuationToken;
+      this.setState({
+        dependents: tasks.map(({ task, status }) => ({
+          taskId: status.taskId,
+          name: task?.metadata?.name ?? status.taskId,
+          state: status.state,
+        })),
+        dependentsPage: page,
+        dependentsLoading: false,
+        hasNextDependentsPage: Boolean(continuationToken),
+      });
+    } catch (error) {
+      if (this.isCurrent(taskId)) {
+        this.setState({
+          dependents: [],
+          dependentsLoading: false,
+          hasNextDependentsPage: false,
+          error,
+        });
+      }
+    }
+  }
+
+  refreshStatus = async () => {
+    const { taskId } = this;
+
+    if (!taskId || !this.state.task) {
+      return;
+    }
+
+    try {
+      const { status } = await this.queue.status(taskId);
+
+      if (this.isCurrent(taskId)) {
+        this.applyStatus(status);
+      }
+    } catch {
+      // a failed poll is not worth reporting; the next one may succeed
+    }
+  };
+
+  /**
+   * Show a newly fetched or newly published status, and refresh the artifacts
+   * that go with it. A run appearing or resolving invalidates the artifact
+   * pages we are holding, so paging starts over in that case.
+   */
+  applyStatus(status) {
+    const runsChanged =
+      (status.runs?.length ?? 0) !== (this.state.status?.runs?.length ?? 0);
+    const page = runsChanged ? 0 : this.state.artifactsPage;
+
+    if (runsChanged) {
+      this.artifactTokens = [null];
+    }
+
+    this.setState({ status });
+    this.loadArtifacts(status, page);
+  }
+
+  subscribe(taskId) {
+    if (this.listener) {
+      if (this.listener.taskId === taskId) {
+        return this.listener;
+      }
+
+      this.unsubscribe();
+    }
+
+    const unsubscribe = subscribeToTaskEvents(
+      { subscriptions: TASK_EVENTS, routingKey: { taskId } },
+      {
+        onMessage: this.handleTaskEvent,
+        onError: this.handleSubscriptionError,
+      }
+    );
+
+    this.listener = { taskId, unsubscribe };
+  }
+
+  unsubscribe() {
+    if (!this.listener) {
+      return;
+    }
+
+    this.listener.unsubscribe();
+    this.listener = null;
+  }
+
+  handleTaskEvent = message => {
+    const status = message?.payload?.status;
+
+    if (!status || !this.isCurrent(status.taskId)) {
+      return;
+    }
+
+    // the event carries the full status, so apply it directly rather than
+    // going back to the queue for it
+    this.setState({ subscriptionError: null });
+    this.applyStatus(status);
+  };
+
+  handleSubscriptionError = subscriptionError => {
+    if (this.mounted) {
+      this.setState({ subscriptionError });
+    }
+  };
 
   getTaskActionsData() {
     const taskActions = [];
     const actionInputs = {};
     const actionData = {};
-    const {
-      data: { task },
-    } = this.props;
+    const { task, taskActions: actions } = this.state;
 
-    if (Array.isArray(task?.taskActions?.actions)) {
-      task?.taskActions?.actions.forEach(action => {
+    if (Array.isArray(actions?.actions)) {
+      actions.actions.forEach(action => {
         // if an action with this name has already been selected,
         // don't consider this version
         if (
@@ -185,75 +491,14 @@ export default class ViewTask extends Component {
     return { taskActions, actionInputs, actionData };
   }
 
-  state = {
-    previousTaskId: null,
-    selectedAction: null,
-    dialogOpen: false,
-    actionLoading: false,
-    dialogActionProps: null,
-    dialogError: null,
-    changePriorityDialogOpen: false,
-    caches: null,
-    selectedCaches: null,
-    formInputs: null,
-  };
+  /**
+   * The task as the action machinery expects it: the definition, with the
+   * fields that only exist alongside it.
+   */
+  getActionTask() {
+    const { task, decisionTask } = this.state;
 
-  listener = null;
-
-  componentDidUpdate(prevProps) {
-    const taskId = prevProps.match.params.taskId || '';
-    const {
-      data: { task, subscribeToMore, refetch },
-    } = this.props;
-
-    if (task && taskId !== task.taskId) {
-      this.subscribe(task.taskId, subscribeToMore, refetch);
-    }
-  }
-
-  componentWillUnmount() {
-    this.unsubscribe();
-  }
-
-  subscribe(taskId, subscribeToMore, refetch) {
-    if (this.listener) {
-      if (this.listener.taskId === taskId) {
-        return this.listener;
-      }
-
-      this.unsubscribe();
-    }
-
-    const unsubscribe = subscribeToMore({
-      document: taskSubscription,
-      variables: {
-        taskId,
-        subscriptions: [
-          'tasksDefined',
-          'tasksPending',
-          'tasksRunning',
-          'tasksCompleted',
-          'tasksFailed',
-          'tasksException',
-        ],
-      },
-      // refetch everything as subscription event holds incomplete task data
-      updateQuery: refetch,
-    });
-
-    this.listener = {
-      taskId,
-      unsubscribe,
-    };
-  }
-
-  unsubscribe() {
-    if (!this.listener) {
-      return;
-    }
-
-    this.listener.unsubscribe();
-    this.listener = null;
+    return { taskId: this.taskId, ...task, decisionTask };
   }
 
   handleActionClick = name => () => {
@@ -298,120 +543,58 @@ export default class ViewTask extends Component {
     async () => {
       this.preRunningAction();
 
-      const {
-        client,
-        data: { task },
-      } = this.props;
-      const { formInputs } = this.state;
+      const { formInputs, taskActions } = this.state;
       const { actionData } = this.getTaskActionsData();
       const { action } = actionData[name];
       const taskId = await submitTaskAction({
-        task,
-        taskActions: task.taskActions,
+        task: this.getActionTask(),
+        taskActions,
         form: formInputs,
         action,
-        apolloClient: client,
         user: this.context.user,
       });
 
       return taskId;
     };
 
-  handleArtifactsPageChange = ({ cursor, previousCursor }) => {
-    const {
-      match,
-      data: { task, fetchMore },
-    } = this.props;
-    const runId = match.params.runId || 0;
-
-    return fetchMore({
-      query: pageArtifactsQuery,
-      variables: {
-        runId,
-        taskId: task.taskId,
-        artifactsConnection: {
-          limit: ARTIFACTS_PAGE_SIZE,
-          cursor,
-          previousCursor,
-        },
-      },
-      updateQuery(previousResult, { fetchMoreResult }) {
-        const { edges, pageInfo } = fetchMoreResult.artifacts;
-
-        if (!edges.length) {
-          return previousResult;
-        }
-
-        return dotProp.set(
-          previousResult,
-          `task.status.runs.${runId}.artifacts`,
-          artifacts =>
-            dotProp.set(
-              dotProp.set(artifacts, 'edges', edges),
-              'pageInfo',
-              pageInfo
-            )
-        );
-      },
-    });
+  handleArtifactsNextPage = () => {
+    this.loadArtifacts(this.state.status, this.state.artifactsPage + 1);
   };
 
-  handleDependentsPageChange = ({ cursor, previousCursor }) => {
-    const {
-      data: { fetchMore },
-    } = this.props;
+  handleArtifactsPreviousPage = () => {
+    this.loadArtifacts(
+      this.state.status,
+      Math.max(this.state.artifactsPage - 1, 0)
+    );
+  };
 
-    return fetchMore({
-      variables: {
-        dependentsConnection: {
-          limit: DEPENDENTS_PAGE_SIZE,
-          cursor,
-          previousCursor,
-        },
-      },
-      updateQuery(previousResult, { fetchMoreResult }) {
-        const { edges, pageInfo } = fetchMoreResult.dependents;
+  handleDependentsNextPage = () => {
+    this.loadDependents(this.state.dependentsPage + 1);
+  };
 
-        return dotProp.set(previousResult, 'dependents', dependents =>
-          dotProp.set(
-            dotProp.set(dependents, 'edges', edges),
-            'pageInfo',
-            pageInfo
-          )
-        );
-      },
-    });
+  handleDependentsPreviousPage = () => {
+    this.loadDependents(Math.max(this.state.dependentsPage - 1, 0));
   };
 
   // copy fields from the parent task, intentionally excluding some
   // fields which might cause confusion if left unchanged
-  handleCloneTask = () => {
-    const task = removeKeys(cloneDeep(this.props.data.task), ['__typename']);
-
-    return mergeRight(
+  handleCloneTask = () =>
+    mergeRight(
       omit(
-        [
-          ...TASK_ADDED_FIELDS,
-          'routes',
-          'taskGroupId',
-          'schedulerId',
-          'priority',
-          'requires',
-        ],
-        task
+        ['routes', 'taskGroupId', 'schedulerId', 'priority', 'requires'],
+        cloneDeep(this.state.task)
       ),
       { schedulerId: UI_SCHEDULER_ID }
     );
-  };
 
   handleRerunComplete = () => {
     this.handleActionDialogClose();
-    this.props.data.refetch();
+    this.refreshStatus();
   };
 
   handleCancelComplete = () => {
     this.handleActionDialogClose();
-    this.props.data.refetch();
+    this.refreshStatus();
   };
 
   handleCreateInteractiveComplete = taskId => {
@@ -485,14 +668,12 @@ export default class ViewTask extends Component {
 
   handleCreateLoaner = async () => {
     const taskId = nice();
-    const task = parameterizeTask(gqlTaskToApi(this.props.data.task));
+    const task = parameterizeTask(this.state.task);
 
     this.preRunningAction();
 
     try {
-      const queue = getClient({ Class: Queue, user: this.context.user });
-
-      await queue.createTask(taskId, task);
+      await this.queue.createTask(taskId, task);
 
       return taskId;
     } catch (error) {
@@ -561,8 +742,24 @@ export default class ViewTask extends Component {
   handleChangePriorityComplete = () => {
     this.setState({ changePriorityDialogOpen: false });
     // refresh the task so the new priority is reflected immediately
-    this.props.data.refetch();
+    this.reloadTaskDefinition();
   };
+
+  async reloadTaskDefinition() {
+    const { taskId } = this;
+
+    try {
+      const task = await this.queue.task(taskId);
+
+      if (this.isCurrent(taskId)) {
+        this.setState({ task });
+      }
+    } catch (error) {
+      if (this.isCurrent(taskId)) {
+        this.setState({ error });
+      }
+    }
+  }
 
   handlePurgeWorkerCacheClick = () => {
     const title = 'Purge Worker Cache';
@@ -714,26 +911,18 @@ export default class ViewTask extends Component {
   };
 
   purgeWorkerCache = async () => {
-    const { provisionerId, workerType } = splitTaskQueueId(
-      this.props.data.task.taskQueueId
-    );
+    const { taskQueueId } = this.state.task;
     const { selectedCaches } = this.state;
+    const purgeCache = this.props.createTaskclusterClient({
+      Class: PurgeCache,
+    });
 
     this.preRunningAction();
 
     try {
       await Promise.all(
         [...selectedCaches].map(cacheName =>
-          this.props.client.mutate({
-            mutation: purgeWorkerCacheQuery,
-            variables: {
-              provisionerId,
-              workerType,
-              payload: {
-                cacheName,
-              },
-            },
-          })
+          purgeCache.purgeCache(taskQueueId, { cacheName })
         )
       );
     } catch (error) {
@@ -749,12 +938,7 @@ export default class ViewTask extends Component {
     this.preRunningAction();
 
     try {
-      await this.props.client.mutate({
-        mutation: rerunTaskQuery,
-        variables: {
-          taskId,
-        },
-      });
+      await this.queue.rerunTask(taskId);
       // make sure location doesn't include previous runId,
       // so the UI will show the latest run automatically
       history.push(`/tasks/${taskId}${location.hash}`);
@@ -770,12 +954,7 @@ export default class ViewTask extends Component {
     this.preRunningAction();
 
     try {
-      await this.props.client.mutate({
-        mutation: cancelTaskQuery,
-        variables: {
-          taskId,
-        },
-      });
+      await this.queue.cancelTask(taskId);
     } catch (error) {
       this.postRunningFailedAction(error);
       throw error;
@@ -788,12 +967,7 @@ export default class ViewTask extends Component {
     this.preRunningAction();
 
     try {
-      await this.props.client.mutate({
-        mutation: scheduleTaskQuery,
-        variables: {
-          taskId,
-        },
-      });
+      await this.queue.scheduleTask(taskId);
     } catch (error) {
       this.postRunningFailedAction(error);
       throw error;
@@ -802,7 +976,7 @@ export default class ViewTask extends Component {
 
   retriggerTask = async () => {
     const taskId = nice();
-    const task = gqlTaskToApi(this.props.data.task);
+    const task = cloneDeep(this.state.task);
     const now = Date.now();
     const created = Date.parse(task.created);
 
@@ -816,9 +990,7 @@ export default class ViewTask extends Component {
     this.preRunningAction();
 
     try {
-      const queue = getClient({ Class: Queue, user: this.context.user });
-
-      await queue.createTask(taskId, task);
+      await this.queue.createTask(taskId, task);
 
       return taskId;
     } catch (error) {
@@ -885,13 +1057,21 @@ export default class ViewTask extends Component {
   };
 
   render() {
+    const { classes, description, match } = this.props;
     const {
-      classes,
-      description,
-      data: { loading, error, task, dependents },
-      match,
-    } = this.props;
-    const {
+      task,
+      status,
+      loading,
+      error,
+      subscriptionError,
+      artifacts,
+      artifactsLoading,
+      artifactsPage,
+      hasNextArtifactsPage,
+      dependents,
+      dependentsLoading,
+      dependentsPage,
+      hasNextDependentsPage,
       dialogActionProps,
       selectedAction,
       dialogOpen,
@@ -900,10 +1080,11 @@ export default class ViewTask extends Component {
       formInputs,
     } = this.state;
     const { actionData, taskActions } = this.getTaskActionsData();
+    const { taskId } = match.params;
     let tags;
 
     if (task) {
-      tags = Object.entries(task.tags);
+      tags = Object.entries(task.tags ?? {});
     }
 
     return (
@@ -917,7 +1098,7 @@ export default class ViewTask extends Component {
             defaultValue={match.params.taskId}
           />
         }>
-        <Helmet state={task?.status.state} />
+        <Helmet state={status?.state} />
         {loading && (
           <Fragment>
             <Spinner loading />
@@ -925,7 +1106,8 @@ export default class ViewTask extends Component {
           </Fragment>
         )}
         <ErrorPanel fixed error={error} warning={Boolean(task)} />
-        {task && (
+        <ErrorPanel fixed warning error={subscriptionError} />
+        {task && status && (
           <Fragment>
             <Breadcrumbs>
               <Link to={`/tasks/groups/${task.taskGroupId}`}>
@@ -971,24 +1153,32 @@ export default class ViewTask extends Component {
             <Grid container spacing={3}>
               <Grid item xs={12} md={6}>
                 <TaskDetailsCard
-                  task={task}
+                  task={{ ...task, taskId, status }}
                   user={this.context.user}
                   dependents={dependents}
-                  onDependentsPageChange={this.handleDependentsPageChange}
+                  dependentsLoading={dependentsLoading}
+                  dependentsPage={dependentsPage}
+                  hasNextDependentsPage={hasNextDependentsPage}
+                  hasPreviousDependentsPage={dependentsPage > 0}
+                  onDependentsNextPage={this.handleDependentsNextPage}
+                  onDependentsPreviousPage={this.handleDependentsPreviousPage}
                   onChangePriority={this.handleChangePriorityClick}
                 />
               </Grid>
 
               <Grid item xs={12} md={6}>
                 <TaskRunsCard
-                  selectedRunId={
-                    match.params.runId
-                      ? parseInt(match.params.runId, 10)
-                      : Math.max(task.status.runs.length - 1, 0)
-                  }
-                  runs={task.status.runs}
+                  taskId={taskId}
+                  selectedRunId={this.getSelectedRunId()}
+                  runs={status.runs}
                   taskQueueId={task.taskQueueId}
-                  onArtifactsPageChange={this.handleArtifactsPageChange}
+                  artifacts={artifacts}
+                  artifactsLoading={artifactsLoading}
+                  artifactsPage={artifactsPage}
+                  hasNextArtifactsPage={hasNextArtifactsPage}
+                  hasPreviousArtifactsPage={artifactsPage > 0}
+                  onArtifactsNextPage={this.handleArtifactsNextPage}
+                  onArtifactsPreviousPage={this.handleArtifactsPreviousPage}
                   // docker worker uses `task.payload.log` while
                   // generic worker uses `task.payload.logs.live`
                   liveLogName={task.payload?.logs?.live || task.payload?.log}
@@ -1093,10 +1283,10 @@ export default class ViewTask extends Component {
                 icon={<ChartIcon />}
                 FabProps={{
                   disabled: [
-                    TASK_STATE.PENDING,
-                    TASK_STATE.RUNNING,
-                    TASK_STATE.UNSCHEDULED,
-                  ].includes(task.status.state),
+                    API_TASK_STATE.PENDING,
+                    API_TASK_STATE.RUNNING,
+                    API_TASK_STATE.UNSCHEDULED,
+                  ].includes(status.state),
                 }}
                 tooltipTitle="Profile Task Log"
                 onClick={this.handleOpenLogProfiler}
@@ -1141,9 +1331,7 @@ export default class ViewTask extends Component {
             {this.state.changePriorityDialogOpen && (
               <ChangeTaskPriorityDialog
                 open={this.state.changePriorityDialogOpen}
-                currentPriority={task.priority
-                  ?.toLowerCase()
-                  .replace(/_/g, '-')}
+                currentPriority={task.priority}
                 onSubmit={priority =>
                   changeTaskPriority({
                     taskId: match.params.taskId,

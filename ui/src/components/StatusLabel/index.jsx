@@ -13,7 +13,7 @@ import labels from '../../utils/labels';
   },
 }))
 /**
- * A label color-coded based on known statuses from GraphQL responses.
+ * A label color-coded based on known statuses.
  */
 export default class StatusLabel extends Component {
   static defaultProps = {
@@ -24,7 +24,8 @@ export default class StatusLabel extends Component {
 
   static propTypes = {
     /**
-     * A GraphQL status/state string.
+     * A status/state string. REST-cased values (`all-completed`) and
+     * GraphQL-cased values (`ALL_COMPLETED`) are both accepted.
      */
     state: string.isRequired,
     /**
@@ -42,19 +43,24 @@ export default class StatusLabel extends Component {
 
   render() {
     const { classes, variant, state, mini, className, ...props } = this.props;
+    // The REST API spells states `all-completed`; the labels map (and the
+    // display convention this component established) uses `ALL_COMPLETED`.
+    const normalized = String(state || '')
+      .toUpperCase()
+      .replace(/-/g, '_');
 
     return (
       <Label
         mini={mini}
-        status={variant || labels[state.toUpperCase()] || 'default'}
+        status={variant || labels[normalized] || 'default'}
         className={classNames(
           {
-            [classes.pending]: state === 'PENDING',
+            [classes.pending]: normalized === 'PENDING',
           },
           className
         )}
         {...props}>
-        {state || 'UNKNOWN'}
+        {normalized || 'UNKNOWN'}
       </Label>
     );
   }

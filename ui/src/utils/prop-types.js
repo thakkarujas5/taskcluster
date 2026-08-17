@@ -75,8 +75,10 @@ export const artifacts = shape({
   edges: arrayOf(artifact),
 });
 
+export const artifactList = arrayOf(artifact);
+
 export const run = shape({
-  taskId: string,
+  runId: number,
   state: string,
   reasonCreated: string,
   scheduled: date,
@@ -84,11 +86,12 @@ export const run = shape({
   workerGroup: string,
   workerId: string,
   takenUntil: date,
-  artifacts,
 });
 
 export const runs = arrayOf(run);
 
+// Both spellings are accepted while some views read the REST API (`running`)
+// and others still read GraphQL (`RUNNING`).
 export const taskState = oneOf([
   'RUNNING',
   'PENDING',
@@ -96,6 +99,12 @@ export const taskState = oneOf([
   'COMPLETED',
   'FAILED',
   'EXCEPTION',
+  'running',
+  'pending',
+  'unscheduled',
+  'completed',
+  'failed',
+  'exception',
 ]);
 
 export const status = shape({
@@ -130,6 +139,13 @@ export const taskPriority = oneOf([
   'LOW',
   'VERY_LOW',
   'LOWEST',
+  'highest',
+  'very-high',
+  'high',
+  'medium',
+  'low',
+  'very-low',
+  'lowest',
 ]);
 
 export const taskActions = shape({

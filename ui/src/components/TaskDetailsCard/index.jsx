@@ -1,6 +1,6 @@
 import React, { Component, Fragment } from 'react';
 import classNames from 'classnames';
-import { arrayOf, func, shape, object } from 'prop-types';
+import { arrayOf, bool, func, number, shape, string, object } from 'prop-types';
 import deepSortObject from 'deep-sort-object';
 import { withStyles } from '@material-ui/core/styles';
 import Card from '@material-ui/core/Card';
@@ -19,12 +19,12 @@ import OpenInNewIcon from 'mdi-react/OpenInNewIcon';
 import { LinearProgress } from '@material-ui/core';
 import Label from '../Label';
 import JsonDisplay from '../JsonDisplay';
-import ConnectionDataTable from '../ConnectionDataTable';
+import PaginatedDataTable from '../PaginatedDataTable';
 import CopyToClipboardListItem from '../CopyToClipboardListItem';
 import DateDistance from '../DateDistance';
 import StatusLabel from '../StatusLabel';
-import { DEPENDENTS_PAGE_SIZE } from '../../utils/constants';
-import { pageInfo, task } from '../../utils/prop-types';
+import { DEPENDENTS_PAGE_SIZE, TASK_REQUIRES } from '../../utils/constants';
+import { task } from '../../utils/prop-types';
 import splitTaskQueueId from '../../utils/splitTaskQueueId';
 import Link from '../../utils/Link';
 import { getTaskDefinitions, getTaskStatuses } from '../../utils/queueTask';
@@ -97,20 +97,36 @@ import { getTaskDefinitions, getTaskStatuses } from '../../utils/queueTask';
 export default class TaskDetailsCard extends Component {
   static defaultProps = {
     dependentTasks: null,
-    dependents: null,
+    dependents: [],
+    dependentsLoading: false,
+    dependentsPage: 0,
+    hasNextDependentsPage: false,
+    hasPreviousDependentsPage: false,
     onChangePriority: null,
   };
 
   static propTypes = {
     /**
-     * A GraphQL task response.
+     * A task definition, with its `taskId` and `status` merged in.
      */
     task: task.isRequired,
-    dependents: shape({
-      edges: arrayOf(task),
-      pageInfo,
-    }),
-    onDependentsPageChange: func.isRequired,
+    /**
+     * The current page of tasks depending on this one, as returned by
+     * `queue.listDependentTasks`.
+     */
+    dependents: arrayOf(
+      shape({
+        taskId: string,
+        name: string,
+        state: string,
+      })
+    ),
+    dependentsLoading: bool,
+    dependentsPage: number,
+    hasNextDependentsPage: bool,
+    hasPreviousDependentsPage: bool,
+    onDependentsNextPage: func.isRequired,
+    onDependentsPreviousPage: func.isRequired,
     user: object,
     /** Called to open the change-priority dialog; makes the priority clickable. */
     onChangePriority: func,
@@ -176,7 +192,12 @@ export default class TaskDetailsCard extends Component {
       classes,
       task,
       dependents,
-      onDependentsPageChange,
+      dependentsLoading,
+      dependentsPage,
+      hasNextDependentsPage,
+      hasPreviousDependentsPage,
+      onDependentsNextPage,
+      onDependentsPreviousPage,
       user,
       onChangePriority,
     } = this.props;
@@ -320,7 +341,7 @@ export default class TaskDetailsCard extends Component {
                             <em> dependencies </em>
                           </strong>
                           are
-                          {task.requires === 'ALL_COMPLETED' ? (
+                          {task.requires === TASK_REQUIRES.ALL_COMPLETED ? (
                             <Fragment>
                               &nbsp;
                               <code>all-completed</code> successfully.
@@ -369,7 +390,7 @@ export default class TaskDetailsCard extends Component {
                   />
                 </ListItem>
               )}
-              {dependents?.edges?.length ? (
+              {dependents.length ? (
                 <Fragment>
                   <ListItem>
                     <ListItemText
@@ -377,26 +398,25 @@ export default class TaskDetailsCard extends Component {
                       secondary="The following tasks depend on this task resolving successfully."
                     />
                   </ListItem>
-                  <ConnectionDataTable
+                  <PaginatedDataTable
                     withoutTopPagination
-                    connection={dependents}
+                    items={dependents}
+                    loading={dependentsLoading}
+                    page={dependentsPage}
+                    hasNextPage={hasNextDependentsPage}
+                    hasPreviousPage={hasPreviousDependentsPage}
+                    onNextPage={onDependentsNextPage}
+                    onPreviousPage={onDependentsPreviousPage}
                     pageSize={DEPENDENTS_PAGE_SIZE}
                     sortByHeader={null}
                     sortDirection="desc"
-                    onPageChange={onDependentsPageChange}
                     allowFilter
-                    filterFunc={({ node }, filterValue) =>
-                      String(node?.metadata?.name)
+                    filterFunc={({ name }, filterValue) =>
+                      String(name)
                         .toLowerCase()
                         .includes(filterValue.toLowerCase())
                     }
-                    renderRow={({
-                      node: {
-                        taskId,
-                        metadata: { name },
-                        status: { state },
-                      },
-                    }) => (
+                    renderRow={({ taskId, name, state }) => (
                       <TableRow
                         hover
                         className={classNames(

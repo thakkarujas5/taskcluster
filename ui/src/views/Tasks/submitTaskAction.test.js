@@ -7,6 +7,8 @@ vi.mock('../../utils/client', () => ({
   getClient: vi.fn(),
 }));
 vi.mock('@taskcluster/client-web', () => ({
+  Auth: vi.fn(),
+  Hooks: vi.fn(),
   Queue: vi.fn(),
 }));
 // Mock validateActionsJson to avoid fetch in test environment
@@ -39,8 +41,7 @@ describe('submitTaskAction', () => {
     getClient.mockReturnValue({ createTask: mockCreateTask });
   });
 
-  it('action.kind=task: calls Queue.createTask directly (not Apollo)', async () => {
-    const apolloClient = { mutate: vi.fn(), query: vi.fn() };
+  it('action.kind=task: calls Queue.createTask directly', async () => {
     const task = {
       taskId: 'abc123',
       taskGroupId: 'abc123',
@@ -68,18 +69,14 @@ describe('submitTaskAction', () => {
       taskActions: task.taskActions,
       form: '{}',
       action,
-      apolloClient,
       user,
     });
 
     // Queue.createTask should be called directly
     expect(mockCreateTask).toHaveBeenCalledTimes(1);
-    // apolloClient.mutate should NOT be called for task kind
-    expect(apolloClient.mutate).not.toHaveBeenCalled();
   });
 
   it('action.kind=task: passes authorizedScopes from taskGroup.scopes', async () => {
-    const apolloClient = { mutate: vi.fn(), query: vi.fn() };
     const scopes = ['queue:create-task:proj-test/test-worker'];
     const task = {
       taskId: 'abc123',
@@ -110,7 +107,6 @@ describe('submitTaskAction', () => {
       },
       form: '{}',
       action,
-      apolloClient,
       user,
     });
 
@@ -120,5 +116,45 @@ describe('submitTaskAction', () => {
         authorizedScopes: scopes,
       })
     );
+  });
+
+  it('action.kind=hook: expands scopes and triggers the hook over REST', async () => {
+    const expandScopes = vi
+      .fn()
+      .mockResolvedValue({ scopes: ['in-tree:hook-action:proj-test/action'] });
+    const triggerHook = vi.fn().mockResolvedValue({ taskId: 'newTaskId' });
+
+    getClient.mockReturnValue({ expandScopes, triggerHook });
+
+    const task = {
+      taskId: 'abc123',
+      taskGroupId: 'abc123',
+      scopes: ['assume:repo:test'],
+    };
+    const action = {
+      kind: 'hook',
+      name: 'action',
+      title: 'Action',
+      context: [],
+      schema: {},
+      hookGroupId: 'proj-test',
+      hookId: 'action',
+      hookPayload: { foo: 'bar' },
+      description: 'Hook action',
+    };
+
+    const taskId = await submitTaskAction({
+      task,
+      taskActions: { variables: {}, actions: [action], version: 1 },
+      form: '{}',
+      action,
+      user,
+    });
+
+    expect(expandScopes).toHaveBeenCalledWith({ scopes: task.scopes });
+    expect(triggerHook).toHaveBeenCalledWith('proj-test', 'action', {
+      foo: 'bar',
+    });
+    expect(taskId).toBe('newTaskId');
   });
 });

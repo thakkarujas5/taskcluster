@@ -667,7 +667,6 @@ export default class TaskGroup extends Component {
         taskActions,
         form,
         action,
-        apolloClient,
         user: this.context.user,
       });
 
