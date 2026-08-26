@@ -1,6 +1,5 @@
 import artifacts from './artifacts.js';
 import auth from './auth.js';
-import cachePurges from './cachePurges.js';
 import clients from './clients.js';
 import github from './github.js';
 import hooks from './hooks.js';
@@ -19,7 +18,6 @@ import workers from './workers.js';
 const loaders = [
   artifacts,
   auth,
-  cachePurges,
   clients,
   github,
   hooks,

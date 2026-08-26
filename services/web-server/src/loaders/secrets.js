@@ -1,4 +1,3 @@
-import DataLoader from 'dataloader';
 import substringFilter from '../utils/searchFilter.js';
 import ConnectionLoader from '../ConnectionLoader.js';
 
@@ -12,25 +11,8 @@ export default ({ secrets }, _isAuthed, _rootUrl, _monitor, _strategies, _req, _
       items: substringFilter(searchTerm, 'name', secretsList),
     };
   });
-  const secret = new DataLoader(names =>
-    Promise.all(
-      names.map(async name => {
-        try {
-          const secret = await secrets.get(name);
-
-          return {
-            name,
-            ...secret,
-          };
-        } catch (err) {
-          return err;
-        }
-      })
-    )
-  );
 
   return {
     secrets: secretsList,
-    secret,
   };
 };
