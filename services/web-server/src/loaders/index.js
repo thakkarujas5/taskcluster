@@ -1,5 +1,4 @@
 import artifacts from './artifacts.js';
-import auth from './auth.js';
 import cachePurges from './cachePurges.js';
 import clients from './clients.js';
 import hooks from './hooks.js';
@@ -13,7 +12,6 @@ import workerTypes from './workerTypes.js';
 
 const loaders = [
   artifacts,
-  auth,
   cachePurges,
   clients,
   hooks,
